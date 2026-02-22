@@ -2,6 +2,7 @@ import streamlit as st
 import random
 from utils.styles import inject_custom_css
 from utils.pokemon_data import POKEMON, POKEMON_IDS, get_stats, sprite_url, back_sprite_url
+from utils.caught_pokemon import mark_caught
 
 st.set_page_config(page_title="Pokémon Gevecht", page_icon="⚔️", layout="wide")
 inject_custom_css()
@@ -102,6 +103,7 @@ if not st.session_state.b_over:
                 st.session_state.b_log.append(f"🏆 **{enemy_name} is verslagen! Jij wint!**")
                 st.session_state.b_over = True
                 st.session_state.b_turn = "done"
+                mark_caught(eid)
             else:
                 st.session_state.b_turn = "enemy"
             st.rerun()
@@ -138,6 +140,7 @@ else:
     last = st.session_state.b_log[-1] if st.session_state.b_log else ""
     if "wint" in last:
         st.success(last)
+        st.info(f"🎉 **{enemy_name}** is toegevoegd aan je Pokédex!")
     else:
         st.error(last)
     if st.button("🔄 Nieuw gevecht", type="primary", use_container_width=True):

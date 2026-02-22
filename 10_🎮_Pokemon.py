@@ -1,6 +1,7 @@
 import streamlit as st
 import random
 from utils.styles import inject_custom_css
+from utils.caught_pokemon import mark_caught
 
 st.set_page_config(page_title="Wie is dat Pokemon? - Kookrooster", page_icon="🎮", layout="wide")
 inject_custom_css()
@@ -69,6 +70,7 @@ def check_answer(guess: str):
         st.session_state.score += 1
         st.session_state.streak += 1
         st.session_state.feedback = "correct"
+        mark_caught(st.session_state.pokemon_id)
     else:
         st.session_state.streak = 0
         st.session_state.feedback = "wrong"
@@ -120,6 +122,7 @@ with col_game:
         # Feedback
         if st.session_state.feedback == "correct":
             st.success(f"✅ Goed! Het is **{correct_name}**!")
+            st.info(f"🎉 **{correct_name}** is toegevoegd aan je Pokédex!")
         elif st.session_state.feedback == "wrong":
             st.error(f"❌ Fout! Je raadde **{st.session_state.wrong_answer}**, maar het was **{correct_name}**.")
 
