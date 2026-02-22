@@ -11,6 +11,7 @@ import streamlit as st
 import random
 from utils.styles import inject_custom_css
 from utils.pokemon_data import POKEMON, POKEMON_IDS, sprite_url
+from utils.caught_pokemon import mark_caught
 
 st.set_page_config(page_title="Pokémon Memory", page_icon="🧠", layout="wide")
 inject_custom_css()
@@ -128,6 +129,7 @@ if not st.session_state.m_over:
                                     st.session_state.m_matched[i2] = True
                                     st.session_state.m_selected = []
                                     st.session_state.m_pairs_found += 1
+                                    mark_caught(cards[i1])
                                     if st.session_state.m_pairs_found >= st.session_state.m_total_pairs:
                                         st.session_state.m_over = True
                                 else:

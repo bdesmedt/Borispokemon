@@ -11,6 +11,7 @@ import streamlit as st
 import random
 from utils.styles import inject_custom_css
 from utils.pokemon_data import POKEMON, POKEMON_IDS, sprite_url
+from utils.caught_pokemon import mark_caught
 
 st.set_page_config(page_title="Pokémon Parcours", page_icon="🏃", layout="wide")
 inject_custom_css()
@@ -137,11 +138,13 @@ if not st.session_state.p_over:
         elif st.session_state.p_step >= TRACK_LENGTH:
             st.session_state.p_over = True
             st.session_state.p_won  = True
+            mark_caught(st.session_state.p_pokemon_id)
         st.rerun()
 
 else:
     if st.session_state.p_won:
         st.success(f"🏆 Gefeliciteerd! **{name}** heeft het parcours voltooid!")
+        st.info(f"🎉 **{name}** is toegevoegd aan je Pokédex!")
         st.balloons()
     else:
         st.error(f"💀 **{name}** heeft alle levens verloren. Probeer opnieuw!")
