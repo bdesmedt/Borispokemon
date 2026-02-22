@@ -18,9 +18,9 @@ inject_custom_css()
 
 # ── constants ──────────────────────────────────────────────────────────────────
 ROWS, COLS = 9, 9          # must be odd for maze generator
-MAX_LIVES  = 3
-HAZARD_PROB  = 0.18        # chance a free cell becomes a hazard
-BONUS_PROB   = 0.05        # chance a free cell becomes a bonus
+MAX_LIVES  = 5
+HAZARD_PROB  = 0.08        # chance a free cell becomes a hazard
+BONUS_PROB   = 0.10        # chance a free cell becomes a bonus
 
 CELL_WALL    = "wall"
 CELL_FREE    = "free"
@@ -83,6 +83,7 @@ def new_maze(pokemon_id: int | None = None):
     st.session_state.mz_hazard_map = hazard_map
     st.session_state.mz_pokemon_id = pid
     st.session_state.mz_pos        = (0, 0)
+    st.session_state.mz_visited    = {(0, 0)}
     st.session_state.mz_lives      = MAX_LIVES
     st.session_state.mz_steps      = 0
     st.session_state.mz_over       = False
@@ -103,6 +104,7 @@ def try_move(dr: int, dc: int):
         return
 
     st.session_state.mz_pos = (nr, nc)
+    st.session_state.mz_visited.add((nr, nc))
     st.session_state.mz_steps += 1
     cell = grid[nr][nc]
 
@@ -148,7 +150,7 @@ col_sprite, col_stats = st.columns([1, 3])
 with col_sprite:
     st.image(sprite_url(pid), width=100, caption=name)
 with col_stats:
-    lives_str = "❤️ " * st.session_state.mz_lives + "🖤 " * max(0, MAX_LIVES - st.session_state.mz_lives)
+    lives_str = "❤️ " * st.session_state.mz_lives + "🖤 " * max(0, max(MAX_LIVES, st.session_state.mz_lives) - st.session_state.mz_lives)
     st.markdown(f"**Levens:** {lives_str}")
     st.markdown(f"**Stappen:** {st.session_state.mz_steps}")
     if st.session_state.mz_message:
@@ -158,9 +160,10 @@ st.markdown("---")
 
 # ── render grid ────────────────────────────────────────────────────────────────
 if not st.session_state.mz_over:
-    pr, pc = st.session_state.mz_pos
-    grid   = st.session_state.mz_grid
-    hmap   = st.session_state.mz_hazard_map
+    pr, pc  = st.session_state.mz_pos
+    grid    = st.session_state.mz_grid
+    hmap    = st.session_state.mz_hazard_map
+    visited = st.session_state.mz_visited
 
     rows_html = ""
     for r in range(ROWS):
@@ -187,8 +190,12 @@ if not st.session_state.mz_over:
                     cell_content = "🟩"
                     bg = "#f1f8e9"
                 else:
-                    cell_content = ""
-                    bg = "#fafafa"
+                    if (r, c) in visited:
+                        cell_content = "·"
+                        bg = "#dceeff"
+                    else:
+                        cell_content = ""
+                        bg = "#fafafa"
             row_html += (
                 f'<td style="width:42px;height:42px;text-align:center;vertical-align:middle;'
                 f'background:{bg};border:1px solid #ddd;font-size:1.4rem;">'
