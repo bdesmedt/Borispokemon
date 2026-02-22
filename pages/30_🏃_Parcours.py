@@ -1,11 +1,11 @@
 """
-Parcours — ontwijkspel
-======================
-De Pokémon rent over een parcours van 10 vakjes.
-Op elk vakje kunnen gevaarlijke objecten verschijnen (links, midden, rechts).
-De speler kiest elke stap: ga naar Links, Midden of Rechts.
-Raak je een object → je verliest een leven.
-Haal je het einde → je wint!
+Pokémon Doolhof-Parcours
+========================
+Navigeer jouw Pokémon door een gegenereerd doolhof.
+• Gebruik de pijlknoppen om te bewegen (omhoog/omlaag/links/rechts)
+• Gevaarlijke vakjes kosten een leven (🔥 vuur, 💧 water, 🪨 rots)
+• Bonusvakjes geven een extra leven terug (⭐)
+• Bereik de finish 🏁 om te winnen!
 """
 import streamlit as st
 import random
@@ -13,159 +13,248 @@ from utils.styles import inject_custom_css
 from utils.pokemon_data import POKEMON, POKEMON_IDS, sprite_url
 from utils.caught_pokemon import mark_caught
 
-st.set_page_config(page_title="Pokémon Parcours", page_icon="🏃", layout="wide")
+st.set_page_config(page_title="Pokémon Doolhof", page_icon="🗺️", layout="wide")
 inject_custom_css()
 
 # ── constants ──────────────────────────────────────────────────────────────────
-TRACK_LENGTH = 10
-MAX_LIVES    = 3
-LANES        = ["⬅️ Links", "⬆️ Midden", "➡️ Rechts"]
-LANE_KEYS    = ["links", "midden", "rechts"]
+ROWS, COLS = 9, 9          # must be odd for maze generator
+MAX_LIVES  = 3
+HAZARD_PROB  = 0.18        # chance a free cell becomes a hazard
+BONUS_PROB   = 0.05        # chance a free cell becomes a bonus
 
-OBSTACLES = ["🪨 Rots", "🔥 Vuur", "💧 Waterplas", "⚡ Bliksem", "🌪️ Wervelwind", "🌵 Cactus"]
+CELL_WALL    = "wall"
+CELL_FREE    = "free"
+CELL_HAZARD  = "hazard"
+CELL_BONUS   = "bonus"
+CELL_START   = "start"
+CELL_FINISH  = "finish"
 
-SAFE_EMOJI   = "✅"
-HIT_EMOJI    = "💥"
-EMPTY_EMOJI  = "⬜"
-OBSTACLE_EMOJI = "🚧"
+HAZARDS = ["🔥", "💧", "🪨", "⚡", "🌵"]
+
+CELL_EMOJI = {
+    CELL_WALL:   "⬛",
+    CELL_FREE:   "⬜",
+    CELL_HAZARD: None,   # filled per cell with hazard emoji
+    CELL_BONUS:  "⭐",
+    CELL_START:  "🟩",
+    CELL_FINISH: "🏁",
+}
+
+# ── maze generation (randomised DFS) ──────────────────────────────────────────
+
+def _generate_maze(rows: int, cols: int) -> list[list[str]]:
+    """Return a grid of CELL_WALL / CELL_FREE using recursive backtracking."""
+    grid = [[CELL_WALL] * cols for _ in range(rows)]
+
+    def carve(r: int, c: int):
+        grid[r][c] = CELL_FREE
+        directions = [(0, 2), (0, -2), (2, 0), (-2, 0)]
+        random.shuffle(directions)
+        for dr, dc in directions:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == CELL_WALL:
+                grid[r + dr // 2][c + dc // 2] = CELL_FREE
+                carve(nr, nc)
+
+    carve(0, 0)
+    return grid
 
 
-def generate_step() -> dict:
-    """Return a dict with the obstacle layout for one step."""
-    num_obstacles = random.choices([1, 2], weights=[70, 30])[0]
-    blocked_lanes = random.sample(LANE_KEYS, num_obstacles)
-    obstacle_type = {lane: random.choice(OBSTACLES) for lane in blocked_lanes}
-    return {"blocked": blocked_lanes, "obstacle_type": obstacle_type}
-
-
-def new_parcours(pokemon_id: int | None = None):
+def new_maze(pokemon_id: int | None = None):
     pid = pokemon_id or random.choice(POKEMON_IDS)
-    st.session_state.p_pokemon_id = pid
-    st.session_state.p_step       = 0          # current position (0 = start)
-    st.session_state.p_lives      = MAX_LIVES
-    st.session_state.p_lane       = "midden"   # starting lane
-    st.session_state.p_history    = []          # list of step result dicts
-    st.session_state.p_over       = False
-    st.session_state.p_won        = False
-    # Pre-generate all obstacle steps
-    st.session_state.p_track = [generate_step() for _ in range(TRACK_LENGTH)]
+    grid = _generate_maze(ROWS, COLS)
+
+    # Place hazards and bonuses on free cells (avoid start & finish corners)
+    hazard_map: dict[tuple, str] = {}
+    for r in range(ROWS):
+        for c in range(COLS):
+            if grid[r][c] == CELL_FREE and (r, c) not in ((0, 0), (ROWS-1, COLS-1)):
+                roll = random.random()
+                if roll < HAZARD_PROB:
+                    grid[r][c] = CELL_HAZARD
+                    hazard_map[(r, c)] = random.choice(HAZARDS)
+                elif roll < HAZARD_PROB + BONUS_PROB:
+                    grid[r][c] = CELL_BONUS
+
+    grid[0][0]              = CELL_START
+    grid[ROWS-1][COLS-1]    = CELL_FINISH
+
+    st.session_state.mz_grid       = grid
+    st.session_state.mz_hazard_map = hazard_map
+    st.session_state.mz_pokemon_id = pid
+    st.session_state.mz_pos        = (0, 0)
+    st.session_state.mz_lives      = MAX_LIVES
+    st.session_state.mz_steps      = 0
+    st.session_state.mz_over       = False
+    st.session_state.mz_won        = False
+    st.session_state.mz_message    = ""
 
 
-def draw_track():
-    """Render the parcours track as a visual grid."""
-    step = st.session_state.p_step
-    history = st.session_state.p_history
-    track = st.session_state.p_track
+def try_move(dr: int, dc: int):
+    r, c = st.session_state.mz_pos
+    nr, nc = r + dr, c + dc
+    grid = st.session_state.mz_grid
 
-    cols = st.columns(TRACK_LENGTH + 1)
-    cols[0].markdown("**Stap**")
-    for i in range(TRACK_LENGTH):
-        label = f"**{i+1}**"
-        if i < step:
-            result = history[i]
-            icon = HIT_EMOJI if result["hit"] else SAFE_EMOJI
-            cols[i+1].markdown(f"{icon}")
-        elif i == step and not st.session_state.p_over:
-            cols[i+1].markdown("🏃")
-        else:
-            cols[i+1].markdown(EMPTY_EMOJI)
+    if not (0 <= nr < ROWS and 0 <= nc < COLS):
+        st.session_state.mz_message = "⛔ Buiten het doolhof!"
+        return
+    if grid[nr][nc] == CELL_WALL:
+        st.session_state.mz_message = "🧱 Dat is een muur!"
+        return
+
+    st.session_state.mz_pos = (nr, nc)
+    st.session_state.mz_steps += 1
+    cell = grid[nr][nc]
+
+    if cell == CELL_HAZARD:
+        emoji = st.session_state.mz_hazard_map.get((nr, nc), "⚠️")
+        st.session_state.mz_lives -= 1
+        st.session_state.mz_message = f"{emoji} Au! Je raakte een gevaar en verliest een leven!"
+        if st.session_state.mz_lives <= 0:
+            st.session_state.mz_over = True
+            st.session_state.mz_won  = False
+            return
+        # Replace hazard with free so it can be crossed safely next time
+        grid[nr][nc] = CELL_FREE
+
+    elif cell == CELL_BONUS:
+        st.session_state.mz_lives = min(MAX_LIVES + 1, st.session_state.mz_lives + 1)
+        st.session_state.mz_message = "⭐ Bonus! Je krijgt een extra leven!"
+        grid[nr][nc] = CELL_FREE
+
+    elif cell == CELL_FINISH:
+        st.session_state.mz_over = True
+        st.session_state.mz_won  = True
+        mark_caught(st.session_state.mz_pokemon_id)
+        return
+
+    else:
+        st.session_state.mz_message = ""
 
 
 # ── init ───────────────────────────────────────────────────────────────────────
-if "p_pokemon_id" not in st.session_state:
-    new_parcours()
+if "mz_grid" not in st.session_state:
+    new_maze()
 
 # ── UI ─────────────────────────────────────────────────────────────────────────
-st.markdown("## 🏃 Pokémon Parcours")
-st.caption("Ontwijkt gevaarlijke objecten en bereik het einde!")
+st.markdown("## 🗺️ Pokémon Doolhof")
+st.caption("Navigeer jouw Pokémon van 🟩 start naar 🏁 finish!")
 
-pid  = st.session_state.p_pokemon_id
+pid  = st.session_state.mz_pokemon_id
 name = POKEMON[pid]
 
-col_sprite, col_info = st.columns([1, 3])
+# Header row: sprite + stats
+col_sprite, col_stats = st.columns([1, 3])
 with col_sprite:
-    st.image(sprite_url(pid), width=120, caption=name)
-with col_info:
-    lives_display = "❤️ " * st.session_state.p_lives + "🖤 " * (MAX_LIVES - st.session_state.p_lives)
-    st.markdown(f"**Levens:** {lives_display}")
-    pct = st.session_state.p_step / TRACK_LENGTH * 100
-    st.progress(int(pct), text=f"Stap {st.session_state.p_step}/{TRACK_LENGTH}")
+    st.image(sprite_url(pid), width=100, caption=name)
+with col_stats:
+    lives_str = "❤️ " * st.session_state.mz_lives + "🖤 " * max(0, MAX_LIVES - st.session_state.mz_lives)
+    st.markdown(f"**Levens:** {lives_str}")
+    st.markdown(f"**Stappen:** {st.session_state.mz_steps}")
+    if st.session_state.mz_message:
+        st.info(st.session_state.mz_message)
 
 st.markdown("---")
-draw_track()
-st.markdown("---")
 
-# ── game logic ─────────────────────────────────────────────────────────────────
-if not st.session_state.p_over:
-    current_step = st.session_state.p_track[st.session_state.p_step]
-    blocked      = current_step["blocked"]
-    obs_types    = current_step["obstacle_type"]
+# ── render grid ────────────────────────────────────────────────────────────────
+if not st.session_state.mz_over:
+    pr, pc = st.session_state.mz_pos
+    grid   = st.session_state.mz_grid
+    hmap   = st.session_state.mz_hazard_map
 
-    st.markdown("### Wat zit er op dit vakje?")
-    c1, c2, c3 = st.columns(3)
-    for col, lane_key, lane_label in zip([c1, c2, c3], LANE_KEYS, LANES):
-        if lane_key in blocked:
-            col.markdown(f"**{obs_types[lane_key]}**")
-        else:
-            col.markdown("🟢 Vrij")
+    rows_html = ""
+    for r in range(ROWS):
+        row_html = "<tr>"
+        for c in range(COLS):
+            if (r, c) == (pr, pc):
+                cell_content = f'<img src="{sprite_url(pid)}" width="36" style="image-rendering:pixelated;"/>'
+                bg = "#c8e6c9"
+            else:
+                ctype = grid[r][c]
+                if ctype == CELL_WALL:
+                    cell_content = "⬛"
+                    bg = "#333"
+                elif ctype == CELL_HAZARD:
+                    cell_content = hmap.get((r, c), "⚠️")
+                    bg = "#fff3e0"
+                elif ctype == CELL_BONUS:
+                    cell_content = "⭐"
+                    bg = "#fffde7"
+                elif ctype == CELL_FINISH:
+                    cell_content = "🏁"
+                    bg = "#e8f5e9"
+                elif ctype == CELL_START:
+                    cell_content = "🟩"
+                    bg = "#f1f8e9"
+                else:
+                    cell_content = ""
+                    bg = "#fafafa"
+            row_html += (
+                f'<td style="width:42px;height:42px;text-align:center;vertical-align:middle;'
+                f'background:{bg};border:1px solid #ddd;font-size:1.4rem;">'
+                f'{cell_content}</td>'
+            )
+        row_html += "</tr>"
+        rows_html += row_html
 
-    st.markdown("### Kies jouw rijstrook:")
-    bc1, bc2, bc3 = st.columns(3)
-    chosen_lane = None
-    if bc1.button(LANES[0], use_container_width=True, key="btn_links"):
-        chosen_lane = "links"
-    if bc2.button(LANES[1], use_container_width=True, key="btn_midden"):
-        chosen_lane = "midden"
-    if bc3.button(LANES[2], use_container_width=True, key="btn_rechts"):
-        chosen_lane = "rechts"
+    st.markdown(
+        f'<table style="border-collapse:collapse;margin:auto;">{rows_html}</table>',
+        unsafe_allow_html=True,
+    )
 
-    if chosen_lane is not None:
-        hit = chosen_lane in blocked
-        st.session_state.p_history.append({
-            "step": st.session_state.p_step + 1,
-            "lane": chosen_lane,
-            "hit": hit,
-            "obstacle": obs_types.get(chosen_lane, None),
-        })
-        if hit:
-            st.session_state.p_lives -= 1
-        st.session_state.p_step += 1
-        st.session_state.p_lane = chosen_lane
+    st.markdown("<br>", unsafe_allow_html=True)
 
-        if st.session_state.p_lives <= 0:
-            st.session_state.p_over = True
-            st.session_state.p_won  = False
-        elif st.session_state.p_step >= TRACK_LENGTH:
-            st.session_state.p_over = True
-            st.session_state.p_won  = True
-            mark_caught(st.session_state.p_pokemon_id)
-        st.rerun()
+    # ── direction controls ─────────────────────────────────────────────────────
+    pad, up_col, _ = st.columns([2, 1, 2])
+    with up_col:
+        if st.button("⬆️", use_container_width=True, key="up"):
+            try_move(-1, 0); st.rerun()
+
+    left_col, _, right_col = st.columns([1, 1, 1])
+    with left_col:
+        if st.button("⬅️", use_container_width=True, key="left"):
+            try_move(0, -1); st.rerun()
+    with right_col:
+        if st.button("➡️", use_container_width=True, key="right"):
+            try_move(0, 1); st.rerun()
+
+    pad2, down_col, _ = st.columns([2, 1, 2])
+    with down_col:
+        if st.button("⬇️", use_container_width=True, key="down"):
+            try_move(1, 0); st.rerun()
 
 else:
-    if st.session_state.p_won:
-        st.success(f"🏆 Gefeliciteerd! **{name}** heeft het parcours voltooid!")
+    if st.session_state.mz_won:
+        st.success(f"🏆 Gefeliciteerd! **{name}** heeft het doolhof uitgelopen in **{st.session_state.mz_steps} stappen**!")
         st.info(f"🎉 **{name}** is toegevoegd aan je Pokédex!")
         st.balloons()
     else:
         st.error(f"💀 **{name}** heeft alle levens verloren. Probeer opnieuw!")
-
-    if st.button("🔄 Nieuw parcours", type="primary", use_container_width=True):
-        new_parcours(st.session_state.p_pokemon_id)
+    if st.button("🔄 Nieuw doolhof", type="primary", use_container_width=True):
+        new_maze(st.session_state.mz_pokemon_id)
         st.rerun()
 
-# ── history ────────────────────────────────────────────────────────────────────
-if st.session_state.p_history:
-    st.markdown("### 📋 Jouw parcours")
-    for entry in st.session_state.p_history:
-        icon = HIT_EMOJI if entry["hit"] else SAFE_EMOJI
-        lane_nl = {"links": "Links", "midden": "Midden", "rechts": "Rechts"}[entry["lane"]]
-        obs_txt = f" — raak: **{entry['obstacle']}**" if entry["hit"] else ""
-        st.markdown(f"{icon} Stap {entry['step']}: **{lane_nl}**{obs_txt}")
+# ── legenda ───────────────────────────────────────────────────────────────────
+with st.expander("📖 Legenda"):
+    st.markdown("""
+| Symbool | Betekenis |
+|---|---|
+| 🟩 | Startpositie |
+| 🏁 | Finish |
+| ⬛ | Muur (niet doorheen) |
+| ⬜ | Vrij pad |
+| 🔥💧🪨⚡🌵 | Gevaar (-1 leven) |
+| ⭐ | Bonus (+1 leven) |
+""")
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Kies jouw Pokémon")
     chosen = st.selectbox("Pokémon", options=POKEMON_IDS, format_func=lambda i: POKEMON[i])
     if st.button("Start met deze Pokémon"):
-        new_parcours(pokemon_id=chosen)
+        new_maze(pokemon_id=chosen)
+        st.rerun()
+    st.markdown("---")
+    if st.button("🔄 Nieuw doolhof", use_container_width=True):
+        new_maze(st.session_state.mz_pokemon_id)
         st.rerun()
